@@ -30,7 +30,6 @@
 package net.rujel.email;
 
 import java.io.*;
-import java.text.FieldPosition;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Properties;
@@ -194,10 +193,20 @@ public class Mailer {
 		}
 	}
 	
+	public static NSData zip(NSData content,String filename) throws IOException {
+		ByteArrayOutputStream zipped = new ByteArrayOutputStream(content.length());
+		ZipOutputStream zipStream = new ZipOutputStream(zipped);
+		zipStream.putNextEntry(new ZipEntry(filename));
+		content.writeToStream(zipStream);
+		zipStream.closeEntry();
+		zipStream.close();
+		content = new NSData(zipped.toByteArray());
+		return content;
+	}
+	
 	public void sendPage(String subject, String text, WOActionResults page,
 			InternetAddress[] to, boolean zip) throws MessagingException{
 		NSData content = page.generateResponse().content();
-		StringBuffer name = new StringBuffer(20);
 		
 		WOSession ses = null;
 		if(page instanceof WOComponent) {
@@ -207,23 +216,16 @@ public class Mailer {
 			//name.append(cpage.name());
 		}
 		SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd");
-		sdf.format(new Date(), name,new FieldPosition(SimpleDateFormat.YEAR_FIELD));
+		String name = sdf.format(new Date());
 		if(zip) {
 			try {
-				ByteArrayOutputStream zipped = new ByteArrayOutputStream(content.length());
-				ZipOutputStream zipStream = new ZipOutputStream(zipped);
-				zipStream.putNextEntry(new ZipEntry(name.toString() + ".html"));
-				content.writeToStream(zipStream);
-				zipStream.closeEntry();
-				zipStream.close();
-				content = new NSData(zipped.toByteArray());
+				content = zip(content,name + ".html");
 			} catch (Exception e) {
 				logger.log(WOLogLevel.WARNING,"Error zipping message",
 						new Object[] {ses,subject,e});
 			}
 		}
-		name.append((zip)?".zip":".html");
-		sendMessage(subject, text, to, content, name.toString());
+		sendMessage(subject, text, to, content, name + ((zip)?".zip":".html"));
 		/*
 		if(!dontSend) {
 				MimeMessage msg = constructMessage(to);
