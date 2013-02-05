@@ -32,6 +32,7 @@ package net.rujel.email;
 import java.io.*;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.Enumeration;
 import java.util.Properties;
 import java.util.logging.Logger;
 import java.util.zip.ZipEntry;
@@ -59,7 +60,7 @@ public class Mailer {
 	private String prot = "smtp";
 	private String mailhost = settings.get("smtpServerURL", null);
 	private String user = settings.get("smtpUser", null);
-
+	public final NSMutableDictionary extraHeaders = new NSMutableDictionary();
 	
 	protected Session mailSession;
 	
@@ -118,6 +119,13 @@ public class Mailer {
 			msg.setRecipients(Message.RecipientType.BCC, InternetAddress.parse(adr, false));
 		msg.setHeader("X-Mailer", "RUJEL");
 		msg.setSentDate(new Date());			
+		if(extraHeaders.count() > 0) {
+			Enumeration enu = extraHeaders.keyEnumerator();
+			while (enu.hasMoreElements()) {
+				String key = (String) enu.nextElement();
+				msg.setHeader(key, extraHeaders.valueForKey(key).toString());
+			}
+		}
 		return msg;
 	}
 
@@ -278,7 +286,8 @@ public class Mailer {
 					size = reader.read(cbuf, 0, size);
 					_defaultMessage = new String(cbuf);
 				} catch (IOException e) {
-					logger.log(WOLogLevel.WARNING,"Error reading default message from file " + filePath,e);
+					logger.log(WOLogLevel.WARNING,
+							"Error reading default message from file " + filePath,e);
 				}
 			}
 		}
@@ -297,7 +306,8 @@ public class Mailer {
 				logger.log(WOLogLevel.FINER,"Mail written to file: " + filename);
 				return true;
 			} catch (Exception ex) {
-				logger.log(WOLogLevel.WARNING,"Failed to write result for " + filename,new Object[] {ex});
+				logger.log(WOLogLevel.WARNING,"Failed to write result for "
+						+ filename,new Object[] {ex});
 				return false;
 			}
 		} else {
