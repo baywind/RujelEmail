@@ -284,7 +284,7 @@ public class Mailer {
 					int size = strm.available();
 					char[] cbuf = new char[size];
 					size = reader.read(cbuf, 0, size);
-					_defaultMessage = new String(cbuf);
+					_defaultMessage = new String(cbuf,0,size);
 				} catch (IOException e) {
 					logger.log(WOLogLevel.WARNING,
 							"Error reading default message from file " + filePath,e);
