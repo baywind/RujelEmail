@@ -30,6 +30,7 @@
 package net.rujel.email;
 
 import java.io.*;
+import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Enumeration;
@@ -53,19 +54,23 @@ import net.rujel.reusables.*;
 public class Mailer {
 	
 	protected static final Logger logger = Logger.getLogger("rujel.mail");
+	public static final DateFormat filenameFormat = new SimpleDateFormat("yyMMdd_HHmmss.SSS'.eml'");
 
 	protected SettingsReader settings = SettingsReader.settingsForPath("mail", false);
 	protected boolean dontSend = settings.getBoolean("dontSend", false);
-	protected boolean writeToFile = settings.getBoolean("writeToFile",false);
+//	protected boolean writeToFile = settings.getBoolean("writeToFile",false);
 	private String prot = "smtp";
 	private String mailhost = settings.get("smtpServerURL", null);
 	private String user = settings.get("smtpUser", null);
 	public final NSMutableDictionary extraHeaders = new NSMutableDictionary();
-	
+	public File outbox;
+	protected File mailDir;
+		
 	protected Session mailSession;
 	
 	public Mailer() {
 		if(!dontSend) {
+			outbox = outbox();
 			java.security.Security.addProvider(new com.sun.net.ssl.internal.ssl.Provider());
 			
 //			http://java.sun.com/products/javamail/javadocs/com/sun/mail/smtp/package-summary.html
@@ -91,6 +96,25 @@ public class Mailer {
 		    
 		    mailSession = Session.getInstance(props, null);
 		    logger.finer("Constructed mailer");
+		}
+		if(settings.getBoolean("writeToFile",false)) {
+			String mailDirPath = SettingsReader.stringForKeyPath("mail.writeFileDir", null);
+			if(mailDirPath == null) {
+				logger.log(WOLogLevel.WARNING,
+						"Can not write to file because writeFileDir is not specified");
+			} else {
+				mailDirPath = Various.convertFilePath(mailDirPath);
+				mailDir = new File(mailDirPath);
+				if(!mailDir.exists() || !mailDir.canWrite()) {
+					logger.log(WOLogLevel.WARNING,
+							"Preferred writeFileDir does not exist or is not writable");
+					mailDir = null;
+				} else if (mailDir.equals(outbox)) {
+					logger.log(WOLogLevel.WARNING,
+							"Preferred writeFileDir can not be the same as outbox.");
+					mailDir = null;
+				}
+			}
 		}
 	}
 	
@@ -130,18 +154,45 @@ public class Mailer {
 	}
 
 	protected void sendMessage(Message msg) throws MessagingException {
-		SMTPTransport t =
-			(SMTPTransport)mailSession.getTransport(prot);
+		sendMessage(msg, (outbox != null));
+	}
+	protected void sendMessage(Message msg, boolean writeToOutbox) throws MessagingException {
+		SMTPTransport t = (SMTPTransport)mailSession.getTransport(prot);
 		try {
 			if (user != null)
 				t.connect(mailhost, user, settings.get("smtpPassword", null));
 			else
 				t.connect();
 			t.sendMessage(msg, msg.getAllRecipients());
+		} catch (MessagingException ex) {
+			if(writeToOutbox) {
+				File out = writeToFile(msg, outbox);
+				if(out != null)
+					logger.log(WOLogLevel.FINE,
+							"Unsent message written to file: " + out.getName());
+			}
+			throw ex;
 		} finally {
 			if (mailSession.getDebug())
 				logger.log(WOLogLevel.FINE,"SMTP responded:",t.getLastServerResponse());
 			t.close();
+		}
+	}
+
+	public static File writeToFile(Message msg, File directory) {
+		File file;
+		do {
+			String filename = filenameFormat.format(new Date());
+			file = new File(directory, filename);
+		} while (file.exists());
+		try {
+			FileOutputStream fos = new FileOutputStream(file);
+			msg.writeTo(fos);
+			fos.close();
+			return file;
+		} catch (Exception e) {
+			logger.log(WOLogLevel.WARNING,"Failed writing message to file: " + file.getName(), e);
+			return null;
 		}
 	}
 
@@ -151,7 +202,6 @@ public class Mailer {
 	}
 	public void sendMessage(String subject, String text, InternetAddress[] to, 
 				NSData attachment, String attachName) throws MessagingException{
-		if(!dontSend) {
 			//try {
 				MimeMessage msg = constructMessage(to);
 				msg.setSubject(subject,"UTF-8");
@@ -185,20 +235,116 @@ public class Mailer {
 				    msg.setContent(mp);
 
 				}
-				//msg.setDataHandler(new DataHandler(text, "text/plain; charset=\"UTF-8\""));
-				//msg.setHeader("Content-Language","ru");
+		if(mailDir != null) {
+			File out = writeToFile(msg, mailDir);
+			if(out != null)
+				logger.log(WOLogLevel.FINER,"Message written to file: " + out.getName(),subject);
+		}
+		if(!dontSend) {
 				sendMessage(msg);
 				logger.log(WOLogLevel.FINER,"Message was sent",subject);
-			/*} catch (MessagingException e) {
-				logger.log(WOLogLevel.WARNING,"Error sending message: " + subject,e);
-			}*/
 		}
-		if(writeToFile) {
-			NSData message = new NSData(text,"utf8");
-			writeToFile(subject + ".txt", message);
-			if(attachment != null)
-				writeToFile(subject + '_' + attachName,attachment);
+	}
+	
+	public static File outbox() {
+		String outboxDir = SettingsReader.stringForKeyPath("mail.outboxDir", null);
+		if(outboxDir == null)
+			return null;
+		outboxDir = Various.convertFilePath(outboxDir);
+		File outbox = new File(outboxDir);
+		if(outbox.isDirectory() && outbox.canWrite())
+			return outbox;
+		else
+			return null;
+	}
+	
+	public static boolean hasDelayed() {
+		File outbox = outbox();
+		if(outbox == null)
+			return false;
+		File[] delayedList = outbox.listFiles(filenameFilter);
+		return (delayedList != null && delayedList.length > 0);
+	}
+	
+	public static File getFirstDelayed(File[] list) {
+		if(list == null || list.length == 0)
+			return null;
+		File minFile = null;
+		String minName = null;
+		for (int i = 0; i < list.length; i++) {
+			if(list[i] == null)
+				continue;
+			if(minName == null || list[i].getName().compareToIgnoreCase(minName) < 0) {
+				minFile = list[i];
+				minName = minFile.getName();
+			}
 		}
+		return minFile;
+	}
+
+	public static final FilenameFilter filenameFilter = new FilenameFilter() {
+		
+		public boolean accept(File dir, String name) {
+			return name.endsWith(".eml");
+		}
+	};
+	
+	public MimeMessage sendFromFile(File file) throws IOException, MessagingException {
+		if(outbox == null)
+			return null;
+		InputStream in = new FileInputStream(file);
+		MimeMessage msg = new MimeMessage(mailSession, in);
+		in.close();
+		sendMessage(msg, false);
+		return msg;
+	}
+	
+	public int sendMinDelayed(File[] delayedList) {
+		if(delayedList == null || delayedList.length == 0) {
+			delayedList = null;
+			return -1;
+		}
+		int delayedIdx = -1;
+		File delayed = null;
+		String minName = null;
+		for (int i = 0; i < delayedList.length; i++) {
+			if(delayedList[i] == null)
+				continue;
+			if(!delayedList[i].exists()) {
+				delayedList[i] = null;
+				continue;
+			}
+			if(minName == null || delayedList[i].getName().compareToIgnoreCase(minName) < 0) {
+				delayedIdx = i;
+				delayed = delayedList[delayedIdx];
+				minName = delayed.getName();
+			}
+		}		
+		if(delayed == null) {
+			delayedList = null;
+			return delayedIdx;
+		}
+		try {
+			sendFromFile(delayed);
+			logger.log(WOLogLevel.FINE, "Succusfully resent delayed email: " + minName);
+			delayed.delete();
+		} catch (Exception e) {
+			if(e instanceof IOException || e instanceof ParseException) {
+				String newName = minName + ".err";
+				logger.log(WOLogLevel.WARNING,"Failed to parce delayed email "
+						+ minName + " renaming to " + newName,e);
+				delayed.renameTo(new File(outbox,newName));
+				delayedList[delayedIdx] = null;
+				return sendMinDelayed(delayedList);
+			} else {
+				String newName = Mailer.filenameFormat.format(new Date());
+
+				logger.log(WOLogLevel.WARNING,"Failed to resend delayed email "
+						+ minName + " renaming to " + newName,e);
+				delayed.renameTo(new File(outbox,newName));
+			}
+		}
+		return delayedIdx;
 	}
 	
 	public static NSData zip(NSData content,String filename) throws IOException {
@@ -285,6 +431,8 @@ public class Mailer {
 					char[] cbuf = new char[size];
 					size = reader.read(cbuf, 0, size);
 					_defaultMessage = new String(cbuf,0,size);
+					reader.close();
+					strm.close();
 				} catch (IOException e) {
 					logger.log(WOLogLevel.WARNING,
 							"Error reading default message from file " + filePath,e);
