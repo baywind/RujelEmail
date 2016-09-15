@@ -68,6 +68,7 @@ public class Mailer {
 		
 	protected Session mailSession;
 	
+	
 	public Mailer() {
 		if(!dontSend) {
 			outbox = outbox();
@@ -121,24 +122,38 @@ public class Mailer {
 	protected void finalize() throws Throwable {
 		super.finalize();
 	}
+	
+	protected HeadersDelegate headersDelegate;
+	public void setHeadersDelegate(HeadersDelegate delegate) {
+		headersDelegate = delegate;
+	}
 
 	protected MimeMessage constructMessage (InternetAddress[] to) throws MessagingException {
 		MimeMessage msg = new MimeMessage(mailSession);
 		String adr = settings.get("mailFrom", null);
+		if(headersDelegate != null)
+			adr = headersDelegate.getHeader("from",adr);
 		if (adr != null)
 			msg.setFrom(new InternetAddress(adr));
 		else
 			msg.setFrom();
 
 		msg.setRecipients(Message.RecipientType.TO, to);
+		
 		adr = settings.get("replyTo", null);
+		if(headersDelegate != null)
+			adr = headersDelegate.getHeader("reply-to",adr);
 		if(adr != null)
 			msg.setReplyTo(InternetAddress.parse(adr, false));
 			
 		adr = settings.get("cc", null);
+		if(headersDelegate != null)
+			adr = headersDelegate.getHeader("cc",adr);
 		if(adr != null)
 			msg.setRecipients(Message.RecipientType.CC, InternetAddress.parse(adr, false));
 		adr = settings.get("bcc", null);
+		if(headersDelegate != null)
+			adr = headersDelegate.getHeader("bcc",adr);
 		if(adr != null)
 			msg.setRecipients(Message.RecipientType.BCC, InternetAddress.parse(adr, false));
 		msg.setHeader("X-Mailer", "RUJEL");
@@ -148,6 +163,19 @@ public class Mailer {
 			while (enu.hasMoreElements()) {
 				String key = (String) enu.nextElement();
 				msg.setHeader(key, extraHeaders.valueForKey(key).toString());
+			}
+		}
+		if(headersDelegate != null) {
+			String[] headers = headersDelegate.headers();
+			if(headers == null || headers.length == 0)
+				return msg;
+			for (int i = 0; i < headers.length; i++) {
+				if(headers[i].equalsIgnoreCase("to") || headers[i].equalsIgnoreCase("from")
+						|| headers[i].equalsIgnoreCase("cc") || headers[i].equalsIgnoreCase("bcc"))
+					continue;
+				String value = headersDelegate.getHeader(headers[i]);
+				if(value != null)
+					msg.setHeader(headers[i], value);
 			}
 		}
 		return msg;
@@ -507,5 +535,12 @@ public class Mailer {
         public void setContentType(String newContentType) {
         	contentType = newContentType;
         }
+	}
+	
+	public static interface HeadersDelegate {
+		public String[] headers();
+		public boolean forceHeader(String name);
+		public String getHeader(String name);
+		public String getHeader(String name, String ifNone);
 	}
 }
